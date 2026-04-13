@@ -1,0 +1,31 @@
+{
+  "_comment": "Sample Freshdesk webhook payload for testing the Kapa integration. Use this to trigger the workflow without a live ticket.",
+  "freshdesk_webhook": {
+    "ticket_id": 1001,
+    "ticket_subject": "How do I reset my API token?",
+    "ticket_description": "Hi, I need to reset my API token but I can't find the option in the dashboard. Can you help?",
+    "ticket_status": 2,
+    "ticket_priority": 1,
+    "ticket_tags": ["kapa-test"],
+    "ticket_language": "en",
+    "requester_id": 5001,
+    "requester_name": "Test User",
+    "requester_email": "testuser@example.com",
+    "group_id": null,
+    "agent_id": null,
+    "created_at": "2026-03-27T10:00:00Z",
+    "updated_at": "2026-03-27T10:00:00Z"
+  },
+  "test_cases": {
+    "english_ticket": {
+      "_comment": "Should trigger Kapa AI query and post reply",
+      "ticket_description": "How do I reset my API token?",
+      "expected_path": "English → Kapa AI → public reply → private note → tag"
+    },
+    "non_english_ticket": {
+      "_comment": "Should trigger language notice and reassign",
+      "ticket_description": "¿Cómo puedo restablecer mi token de API?",
+      "expected_path": "Non-English → language notice → reassign to human agent"
+    }
+  }
+}
