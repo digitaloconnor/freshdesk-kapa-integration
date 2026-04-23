@@ -1,0 +1,445 @@
+{
+  "name": "Answer Freshdesk support tickets automatically with Kapa AI",
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.kapa.ai/query/v1/projects/YOUR_KAPA_PROJECT_ID/chat/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n  JSON.stringify((() => {\n    const idRaw = $json.body?.['ticket-id'] ?? $json.body?.ticket_id ?? $json.ticket_id;\n    const id    = idRaw ? String(idRaw).trim() : \"\";\n    const url   = id ? `https://YOUR_SUBDOMAIN.freshdesk.com/a/tickets/${id}` : \"\";\n    const token = id ? `[FD ticket #${id} ${url} | ignore in answer] ` : \"\";\n\n    const base =\n      $json.cleanDescription\n      || $json.description_text\n      || $json.body?.description_text\n      || $json.body?.description\n      || \"\";\n\n    const instruction =\n      \"Answer in clear, friendly language using no more than 3 sentences. \" +\n      \"Ignore any text between [[private]] and [[/private]]. Do not quote or use it in your answer.\\n\\n\";\n\n    const body = {\n      query: token + instruction + base,\n      integration_id: \"YOUR_KAPA_INTEGRATION_ID\",\n    };\n\n    // Optional: user\n    if ($json.body?.requester_email || $json.body?.requester_name) {\n      body.user = {};\n      if ($json.body?.requester_email) body.user.external_id = $json.body.requester_email;\n      if ($json.body?.requester_name)  body.user.name        = $json.body.requester_name;\n    }\n\n    // Optional: metadata (nice for analytics)\n    if (id) {\n      body.metadata = {\n        freshdesk_ticket_id:  id,\n        freshdesk_ticket_url: url\n      };\n    }\n\n    return body;\n  })()\n  )}\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-176, 848],
+      "id": "77d00cbe-f93b-4c94-8365-6ba78843efad",
+      "name": "Ask Kapa AI",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://YOUR_SUBDOMAIN.freshdesk.com/api/v2/tickets/{{$node[\"FDKAPAAL_Webhook\"].json.body.ticket_id}}/notes\n",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n  (() => {\n    const answer     = $json.answer || \"\";\n    const threadId   = $json.kapa_thread_id || \"\";\n    const qaId       = $json.kapa_qa_id || \"\";\n    const threadUrl  = $json.kapa_thread_url || \"\";\n\n\n    const note =\n      answer +\n      openLine;\n\n    return JSON.stringify({ body: note, private: true });\n  })()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [112, 848],
+      "id": "2c31caae-58f6-46cf-b599-796f9265e104",
+      "name": "Post AI Answer to Ticket"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "freshdesk-kapa",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [64, 208],
+      "id": "e84006cd-4f3f-40eb-a49a-7eabf2a267e1",
+      "name": "Freshdesk Webhook Trigger",
+      "webhookId": "d177a928-6244-4a14-b4e4-2b67471714c4"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://YOUR_SUBDOMAIN.freshdesk.com/api/v2/tickets/{{$node[\"FDKAPAAL_Webhook\"].json.body.ticket_id}}/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"body\": {{ JSON.stringify(\"**[AI Response]**\\n\\nWe are only able to provide support in English.\\nPlease re\u2011write your query in English and we'll be happy to help.\") }},\n  \"private\": true\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-48, 1376],
+      "id": "14bbec18-bdc6-46ae-ad1c-a7ff4107dd1e",
+      "name": "Send Non-English Response"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Helpers ---\nfunction stripHtml(html) {\n  return String(html || \"\")\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \"\")\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \"\")\n    .replace(/<[^>]*>/g, \"\")\n    .replace(/&nbsp;/g, \" \")\n    .trim();\n}\n\n// Remove things that shouldn't count toward language detection\nfunction sanitizeForDetection(text) {\n  return String(text || \"\")\n    // strip markdown links [text](url)\n    .replace(/\\[[^\\]]*]\\([^)]+\\)/g, \" \")\n    // strip raw URLs\n    .replace(/\\bhttps?:\\/\\/\\S+/gi, \" \")\n    .replace(/\\bwww\\.\\S+/gi, \" \")\n    // strip emails\n    .replace(/\\b\\S+@\\S+\\.\\S+\\b/g, \" \")\n    // strip hex-y ids like 0xabc123..., tx hashes, codes\n    .replace(/\\b0x[a-f0-9]{6,}\\b/gi, \" \")\n    .replace(/\\b[a-f0-9]{16,}\\b/gi, \" \")\n    // strip numbers\n    .replace(/[0-9]+/g, \" \")\n    // strip common punctuation/symbols but keep apostrophes for can't/I'm\n    .replace(/[!\"\\u201c\\u201d#$%&()*+,\\-./:;<=>?@[\\\\\\]^_`{|}~]/g, \" \")\n    .replace(/\\s+/g, \" \")\n    .trim();\n}\n\n// Very common English stopwords (small/fast)\nconst stop = new Set([\n  \"the\",\"be\",\"to\",\"of\",\"and\",\"a\",\"in\",\"that\",\"have\",\"it\",\"for\",\"not\",\"on\",\"with\",\n  \"you\",\"do\",\"at\",\"this\",\"but\",\"by\",\"from\",\"we\",\"say\",\"or\",\"an\",\"will\",\"my\",\"all\",\n  \"there\",\"their\",\"is\",\"are\",\"was\",\"were\",\"can\",\"please\",\"help\",\"i\",\"he\",\"she\",\"they\"\n]);\n\n// Small-but-effective English vocab\nconst common = new Set([\n  \"the\",\"be\",\"to\",\"of\",\"and\",\"a\",\"in\",\"that\",\"it\",\"for\",\"not\",\"on\",\"with\",\"as\",\"you\",\n  \"do\",\"at\",\"this\",\"but\",\"his\",\"by\",\"from\",\"they\",\"we\",\"say\",\"her\",\"she\",\"or\",\"an\",\n  \"will\",\"my\",\"one\",\"all\",\"would\",\"there\",\"their\",\"is\",\"are\",\"was\",\"were\",\"been\",\"being\",\n  \"have\",\"has\",\"had\",\"can\",\"could\",\"should\",\"would\",\"may\",\"might\",\"must\",\"shall\",\n  \"please\",\"help\",\"issue\",\"error\",\"login\",\"account\",\"reset\",\"password\",\"how\",\"what\",\n  \"why\",\"where\",\"when\",\"which\",\"who\",\"whom\",\"does\",\"did\",\"done\",\"trying\",\"unable\"\n]);\n\nconst item = items[0];\n\n// --- Input text (what we will pass to Kapa) ---\nconst cleanDescription = stripHtml(\n  item.json?.body?.description ??\n  item.json?.description ??\n  \"\"\n);\n\n// --- Detection text (numbers/links/symbols removed) ---\nconst detectText = sanitizeForDetection(cleanDescription);\n\n// Tokens for detection: only letters + apostrophes (keeps can't/I'm)\nconst tokens = (detectText.toLowerCase().match(/[a-z]+(?:'[a-z]+)?/g) || []);\n\n// --- Metrics (on sanitized text) ---\nconst asciiChars = (detectText.match(/[\\x00-\\x7F]/g) || []).length;\nconst asciiRatio = asciiChars / Math.max(1, detectText.length);\n\nconst stopHits   = tokens.filter(t => stop.has(t)).length;\nconst commonHits = tokens.filter(t => common.has(t)).length;\n\nconst stopRatio   = stopHits   / Math.max(1, tokens.length);\nconst commonRatio = commonHits / Math.max(1, tokens.length);\n\n// --- Thresholds ---\nconst minTokens       = 4;\nconst minAscii        = 0.95;\nconst minStopRatio    = 0.08;\nconst minCommonRatio  = 0.25;\n\nlet isEnglish =\n  tokens.length >= minTokens &&\n  asciiRatio >= minAscii &&\n  stopRatio >= minStopRatio &&\n  commonRatio >= minCommonRatio;\n\n// Short-query fallback: \"can't login please help\", etc.\nif (!isEnglish && tokens.length > 0 && tokens.length < 10) {\n  isEnglish = (commonHits >= 2 && stopHits >= 1 && asciiRatio >= minAscii);\n}\n\n// Extra safety: if we stripped almost everything but still have strong English cues, allow it.\nif (!isEnglish && tokens.length >= 2) {\n  const strongCues = [\"please\",\"help\",\"issue\",\"error\",\"login\",\"reset\",\"password\",\"account\"];\n  const hasCue = tokens.some(t => strongCues.includes(t));\n  if (hasCue && asciiRatio >= minAscii) isEnglish = true;\n}\n\nreturn [{\n  json: {\n    ...item.json,\n    cleanDescription,\n    languageCheck: {\n      isEnglish,\n      asciiRatio,\n      tokens: tokens.length,\n      stopHits,\n      stopRatio,\n      commonHits,\n      commonRatio\n    }\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [32, 448],
+      "id": "f9b86e38-0d3b-4921-b196-508dee5bf4c2",
+      "name": "Check Ticket Language"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "8cc5e4c8-f1fb-41dc-a9d6-fa2da9828b76",
+              "leftValue": "={{$json.languageCheck.isEnglish}}",
+              "rightValue": "=true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [352, 432],
+      "id": "dcafaeb2-da4e-425e-bce1-ad98fa1150ad",
+      "name": "Is Ticket in English?"
+    },
+    {
+      "parameters": {
+        "content": "## 4\ufe0f\u20e3 Non-English Path\nFor non-English tickets:\n1. **Send Non-English Response** \u2014 posts a message asking the user to resubmit in English\n2. **Reassign to Human Agent** \u2014 routes the ticket to a support agent for manual handling",
+        "color": 4,
+        "width": 420,
+        "height": 200
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-128, 1184],
+      "id": "7078ea1e-a4dd-43e4-a1a7-df951dca1848",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## \ud83d\udccb Answer Freshdesk support tickets automatically with Kapa AI\n\n**Who's it for:** Support teams using Freshdesk + Kapa AI who want to auto-answer English-language tickets before routing to a human agent.\n\n**How it works:**\n1. Freshdesk webhook fires when a ticket is tagged (e.g. `Kapa Test`)\n2. Language detection filters non-English tickets — those get a polite redirect message and human reassignment\n3. English tickets are sent to Kapa AI for an answer\n4. The AI response is posted as a private note on the ticket\n5. A private Kapa conversation link is added for agent review\n6. Ticket is tagged `kapa_answered`\n\n**Requirements:**\n- Freshdesk API credential (Basic Auth: API key + `X`)\n- Kapa AI HTTP Header Auth credential\n\n**How to set up:**\n- Replace `YOUR_SUBDOMAIN` in all Freshdesk URLs with your Freshdesk subdomain\n- Replace `YOUR_KAPA_PROJECT_ID` and `YOUR_KAPA_INTEGRATION_ID` in `Ask Kapa AI` with your Kapa project values\n- Set up a Freshdesk webhook pointing to this workflow's webhook URL\n- Attach Freshdesk and Kapa credentials",
+        "height": 400,
+        "color": 3,
+        "width": 900
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -280],
+      "id": "87a245bb-2799-4d9c-9068-bbcbc7f803cc",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## 1\ufe0f\u20e3 Language Check\nChecks if the ticket body is written in English.\n\n- **True** \u2192 route to Kapa AI\n- **False** \u2192 send non-English response + reassign to human agent",
+        "color": 6,
+        "width": 420,
+        "height": 200
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-256, 384],
+      "id": "4db2a3db-cf86-452c-aa37-599258bc2eef",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "## 2\ufe0f\u20e3 Ask Kapa AI\nSends the ticket description to Kapa AI and receives an answer.\n\nOutputs to two nodes in parallel:\n- **Post AI Answer** \u2014 public reply on the ticket\n- **Add Kapa Link** \u2014 private note with the Kapa conversation URL",
+        "color": 6,
+        "width": 420,
+        "height": 200
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-496, 784],
+      "id": "da9908d3-e835-4de2-bd97-b61430384630",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://YOUR_SUBDOMAIN.freshdesk.com/api/v2/tickets/{{ $json.body?.ticket_id ?? $json.ticket_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ agent_name: \"Support Agent\" }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-432, 1392],
+      "id": "8e1d8b03-7955-4ca3-b84a-77f0e18c0521",
+      "name": "Reassign to Human Agent"
+    },
+    {
+      "parameters": {
+        "content": "## 5\ufe0f\u20e3 Agent Reassignment\nReassigns non-English tickets to the default support agent queue.\n\n\u2699\ufe0f *Update the agent ID in the HTTP Request node params.*",
+        "color": 4,
+        "width": 420,
+        "height": 160
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-496, 1168],
+      "id": "1fec7036-f568-4d1c-a671-5db90f2d9348",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse tags coming from the webhook payload and merge with new ones\n\n// 1) Read whatever Freshdesk sent. In your payload it's body.tags (often \"\" or \"tag1, tag2\")\nconst incoming = $json.body?.tags;\n\n// 2) Convert to an array of strings (robust to CSV, space-separated, or JSON array)\nlet existing = [];\nif (Array.isArray(incoming)) {\n  existing = incoming;\n} else if (typeof incoming === 'string') {\n  const s = incoming.trim();\n  if (!s) {\n    existing = [];\n  } else if (s.startsWith('[')) {\n    try { existing = JSON.parse(s); } catch { existing = s.split(','); }\n  } else if (s.includes(',')) {\n    existing = s.split(',');\n  } else {\n    existing = s.split(/\\s+/);\n  }\n} else {\n  existing = [];\n}\n\n// 3) Your new tags to add (customize this array)\nconst toAdd = ['kapa_answered'];\n\n// 4) Normalize, trim, and de-duplicate (case-insensitive)\nconst merged = [];\nconst seen = new Set();\nfor (const t of [...existing, ...toAdd]) {\n  const raw = String(t ?? '').trim();\n  if (!raw) continue;\n  const key = raw.toLowerCase();\n  if (!seen.has(key)) { seen.add(key); merged.push(raw); }\n}\n\n// 5) Output merged list for the next node\nreturn [{ ...$json, merged_tags: merged }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 1376],
+      "id": "20663ecc-1868-40b5-88e1-4bd03dacc5fa",
+      "name": "Merge Ticket Tags"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ `https://YOUR_SUBDOMAIN.freshdesk.com/api/v2/tickets/${$json.fd_ticket_id ?? $json.body?.ticket_id ?? $json.ticket_id}` }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tags: Array.isArray($json.merged_tags) ? $json.merged_tags : [\"kapa_answered\"] }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 1376],
+      "id": "01ae46f4-7ce4-4ea0-86be-bfaa1007478b",
+      "name": "Add Ticket Tag"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7ab7eb8d-ed86-484f-8f11-1b0e778f5d66",
+              "name": "fd_ticket_id",
+              "value": "={{ String($json.body?.ticket_id ?? $json.ticket_id ?? $json.id ?? '').trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "97e78daa-f5e8-4224-966e-d55e915826e3",
+              "name": "safe_tags",
+              "value": "={{ Array.isArray($json.merged_tags)     ? JSON.stringify($json.merged_tags)     : JSON.stringify(         typeof $json.merged_tags === 'string'           ? $json.merged_tags.split(',').map(s => s.trim()).filter(Boolean)           : ['kapa_answered']       ) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [400, 1376],
+      "id": "af359046-79cb-4793-9db2-d207b10188d4",
+      "name": "Prepare Tag Data"
+    },
+    {
+      "parameters": {
+        "content": "## 6\ufe0f\u20e3 Tag Management\nAfter the Kapa link is added, the ticket is tagged to mark it as AI-handled.\n\n\u2699\ufe0f *Update tag name/ID in Prepare Tag Data node.*",
+        "color": 6,
+        "width": 420,
+        "height": 160
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [464, 1184],
+      "id": "a50bc749-e056-4d88-a9a5-c63228429150",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "## 3\ufe0f\u20e3 Private Conversation Link\nAdds a private internal note to the ticket with the direct Kapa conversation link \u2014 makes it easy to review the full AI exchange in Kapa.",
+        "color": 6,
+        "width": 420,
+        "height": 160
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [32, 672],
+      "id": "47c35e1b-45e3-4c72-9bfa-b2494f7ed253",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://YOUR_SUBDOMAIN.freshdesk.com/api/v2/tickets/{{$node[\"FDKAPAAL_Webhook\"].json.body.ticket_id}}/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n  (() => {\n    const projectId = \"YOUR_KAPA_PROJECT_ID\";\n\n    const raw =\n      $json.thread_id ??\n      $json.kapa_thread_id ??\n      $json.threadId ??\n      \"\";\n    const threadId = String(raw).trim().replace(/^[\"']|[\"']$/g, \"\");\n\n    const qaId = String($json.question_answer_id ?? $json.kapa_qa_id ?? \"\").trim();\n\n    const url = threadId\n      ? `https://app.kapa.ai/${projectId}/conversations/${encodeURIComponent(threadId)}`\n      : \"\";\n\n    const body = url\n      ? `Kapa conversation link\\nThread ID: ${threadId}\\nQ/A ID: ${qaId || \"\u2014\"}\\nOpen in Kapa: ${url}`\n      : `Kapa conversation link unavailable (no thread ID)\\nQ/A ID: ${qaId || \"\u2014\"}`;\n\n    return JSON.stringify({ body, private: true });\n  })()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [112, 1040],
+      "id": "a1455c36-52a7-46b0-8984-b394ee2e9893",
+      "name": "Add Kapa Link (Private Note)"
+    }
+  ],
+  "connections": {
+    "Freshdesk Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Check Ticket Language",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Ticket Language": {
+      "main": [
+        [
+          {
+            "node": "Is Ticket in English?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Ticket in English?": {
+      "main": [
+        [
+          {
+            "node": "Ask Kapa AI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Non-English Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Kapa AI": {
+      "main": [
+        [
+          {
+            "node": "Post AI Answer to Ticket",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Add Kapa Link (Private Note)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Kapa Link (Private Note)": {
+      "main": [
+        [
+          {
+            "node": "Merge Ticket Tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Non-English Response": {
+      "main": [
+        [
+          {
+            "node": "Reassign to Human Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Ticket Tags": {
+      "main": [
+        [
+          {
+            "node": "Prepare Tag Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Tag Data": {
+      "main": [
+        [
+          {
+            "node": "Add Ticket Tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "versionId": "2e4fef8b-7e45-4a55-81c7-4531ac7e3b0b",
+  "tags": []
+}
